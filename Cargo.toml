@@ -1,5 +1,8 @@
 [package]
 name = "tokio-retrying-tcpstream"
+description = "tokio::net::TcpStream that will reconnect after fatal error is returned"
+keywords = ["async", "net", "tcp", "io"]
+categories = ["asynchronous", "network-programming"]
 version = "0.1.0"
 authors = ["Sylwester Rąpała <sylwesterrapala@outlook.com>"]
 edition = "2018"
