@@ -14,3 +14,8 @@ license = "MIT"
 tokio = { version = "0.2", features = ["tcp"] }
 futures = "0.3"
 log = "0.4"
+
+[dev-dependencies]
+futures-retry = { git = "https://gitlab.com/xoac/futures-retry", branch = "test" }
+tokio = { version ="0.2", features = ["full"] }
+tokio-util = {version = "0.2", features = ["codec"] }

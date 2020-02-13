@@ -70,10 +70,9 @@ impl TryFrom<tokio::net::TcpStream> for RetryingTcpStream {
 /// Implement creators
 impl RetryingTcpStream {
     pub fn connect_with_settings(addr: &std::net::SocketAddr, settings: TcpStreamSettings) -> Self {
-        let state =
-            ConnectionState::ConnectFuture(Box::pin(tokio::net::TcpStream::connect(addr.clone())));
+        let state = ConnectionState::ConnectFuture(Box::pin(tokio::net::TcpStream::connect(*addr)));
         Self {
-            addr: addr.clone(),
+            addr: *addr,
             state,
             settings,
         }
@@ -219,9 +218,8 @@ impl RetryingTcpStream {
 
     fn reset(&mut self) {
         debug!("RetryinTcpStream => reset was called!");
-        self.state = ConnectionState::ConnectFuture(Box::pin(tokio::net::TcpStream::connect(
-            self.addr.clone(),
-        )))
+        self.state =
+            ConnectionState::ConnectFuture(Box::pin(tokio::net::TcpStream::connect(self.addr)))
     }
 
     fn call_reset_if_io_is_closed2<T>(&mut self, res: Result<T, io::Error>) -> io::Result<T> {
