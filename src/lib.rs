@@ -20,15 +20,16 @@
 //! [TcpStream]: tokio::net::TcpStream
 
 use std::convert::TryFrom;
-use std::io::{Read, Write};
+use std::future::Future;
+use std::io;
 use std::net::Shutdown;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-use futures::try_ready;
+use futures::ready;
 use log::debug;
-use mio;
-use tokio::io::{AsyncRead, AsyncWrite, Error};
-use tokio::prelude::{Async, Future, Poll};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Holding settings [TcpStreamSettings]
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -39,7 +40,7 @@ pub struct TcpStreamSettings {
 
 // Handle connection state
 enum ConnectionState {
-    ConnectFuture(tokio::net::tcp::ConnectFuture),
+    ConnectFuture(Pin<Box<dyn Future<Output = io::Result<tokio::net::TcpStream>>>>),
     TcpStream(tokio::net::TcpStream),
 }
 
@@ -51,7 +52,7 @@ pub struct RetryingTcpStream {
 }
 
 impl TryFrom<tokio::net::TcpStream> for RetryingTcpStream {
-    type Error = Error;
+    type Error = io::Error;
     fn try_from(tcp_stream: tokio::net::TcpStream) -> Result<Self, Self::Error> {
         let settings = TcpStreamSettings {
             nodelay: tcp_stream.nodelay()?,
@@ -69,18 +70,16 @@ impl TryFrom<tokio::net::TcpStream> for RetryingTcpStream {
 /// Implement creators
 impl RetryingTcpStream {
     pub fn connect_with_settings(addr: &std::net::SocketAddr, settings: TcpStreamSettings) -> Self {
+        let state = ConnectionState::ConnectFuture(Box::pin(tokio::net::TcpStream::connect(*addr)));
         Self {
-            addr: addr.clone(),
-            state: ConnectionState::ConnectFuture(tokio::net::TcpStream::connect(addr)),
+            addr: *addr,
+            state,
             settings,
         }
     }
 
-    pub fn from_std(
-        stream: std::net::TcpStream,
-        handle: &tokio::reactor::Handle,
-    ) -> Result<Self, Error> {
-        let tokio_tcp_stream = tokio::net::TcpStream::from_std(stream, handle)?;
+    pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
+        let tokio_tcp_stream = tokio::net::TcpStream::from_std(stream)?;
         Self::try_from(tokio_tcp_stream)
     }
 }
@@ -96,29 +95,19 @@ impl RetryingTcpStream {
 /// [TcpStream]:tokio::net::TcpStream
 /// [ConnectFuture]:tokio::net::tcp::ConnectFuture
 impl RetryingTcpStream {
-    pub fn poll_read_ready(&mut self, mask: mio::Ready) -> Result<Async<mio::Ready>, Error> {
-        let ts = try_ready!(self.poll_into_tcp_stream());
-        let res = ts.poll_read_ready(mask);
-        self.call_reset_if_io_is_closed2(res)
-    }
+    /*
+      pub fn poll_peek(&mut self, cx: &mut Context, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+          let ts = ready!(self.poll_into_tcp_stream(cx))?;
+          let res = ready!(ts.poll_peek(cx, buf));
+          Poll::Ready(self.call_reset_if_io_is_closed2(res))
+      }
+    */
 
-    pub fn poll_write_ready(&mut self) -> Result<Async<mio::Ready>, Error> {
-        let ts = try_ready!(self.poll_into_tcp_stream());
-        let res = ts.poll_write_ready();
-        self.call_reset_if_io_is_closed2(res)
-    }
-
-    pub fn poll_peek(&mut self, buf: &mut [u8]) -> Result<Async<usize>, Error> {
-        let ts = try_ready!(self.poll_into_tcp_stream());
-        let res = ts.poll_peek(buf);
-        self.call_reset_if_io_is_closed2(res)
-    }
-
-    pub fn local_addr(&self) -> Result<std::net::SocketAddr, Error> {
+    pub fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
         self.ref_tcp_stream()?.local_addr()
     }
 
-    pub fn peer_addr(&self) -> Result<std::net::SocketAddr, Error> {
+    pub fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
         match &self.state {
             ConnectionState::ConnectFuture(_) => Ok(self.addr),
             ConnectionState::TcpStream(ts) => {
@@ -129,7 +118,7 @@ impl RetryingTcpStream {
         }
     }
 
-    pub fn nodelay(&self) -> Result<bool, Error> {
+    pub fn nodelay(&self) -> io::Result<bool> {
         match self.ref_tcp_stream() {
             Ok(ts) => {
                 let r = ts.nodelay()?;
@@ -140,7 +129,7 @@ impl RetryingTcpStream {
         }
     }
 
-    pub fn set_nodelay(&mut self, nodelay: bool) -> Result<(), Error> {
+    pub fn set_nodelay(&mut self, nodelay: bool) -> io::Result<()> {
         match &self.state {
             ConnectionState::ConnectFuture(_) => {
                 self.settings.nodelay = nodelay;
@@ -156,11 +145,11 @@ impl RetryingTcpStream {
         }
     }
 
-    pub fn shutdown(&self, how: Shutdown) -> Result<(), Error> {
+    pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
         self.ref_tcp_stream()?.shutdown(how)
     }
 
-    pub fn keepalive(&self) -> Result<Option<Duration>, Error> {
+    pub fn keepalive(&self) -> io::Result<Option<Duration>> {
         match self.ref_tcp_stream() {
             Ok(ts) => {
                 let r = ts.keepalive()?;
@@ -171,14 +160,14 @@ impl RetryingTcpStream {
         }
     }
 
-    pub fn set_keepalive(&self, keepalive: Option<Duration>) -> Result<(), Error> {
+    pub fn set_keepalive(&self, keepalive: Option<Duration>) -> io::Result<()> {
         self.ref_tcp_stream()?.set_keepalive(keepalive)
     }
 }
 
 /// Implement additional methods
 impl RetryingTcpStream {
-    pub fn set_tcp_settings(&mut self, tcp_settings: TcpStreamSettings) -> Result<(), Error> {
+    pub fn set_tcp_settings(&mut self, tcp_settings: TcpStreamSettings) -> io::Result<()> {
         self.set_nodelay(tcp_settings.nodelay)?;
         self.set_keepalive(tcp_settings.keepalive)?;
 
@@ -197,47 +186,44 @@ impl RetryingTcpStream {
         }
     }
 
-    fn ref_tcp_stream(&self) -> Result<&tokio::net::TcpStream, Error> {
+    fn ref_tcp_stream(&self) -> io::Result<&tokio::net::TcpStream> {
         match &self.state {
-            ConnectionState::ConnectFuture(_) => {
-                Err(Error::from(tokio::io::ErrorKind::NotConnected))
-            }
+            ConnectionState::ConnectFuture(_) => Err(io::Error::from(io::ErrorKind::NotConnected)),
             ConnectionState::TcpStream(ts) => Ok(ts),
         }
     }
 
     // Return NotReady until ConnectionState is diffrent than TcpStream
-    fn poll_into_tcp_stream(&mut self) -> Poll<&mut tokio::net::TcpStream, Error> {
-        match &mut self.state {
+    pub fn poll_into_tcp_stream(
+        &mut self,
+        cx: &mut Context,
+    ) -> Poll<io::Result<&mut tokio::net::TcpStream>> {
+        let self2 = self;
+
+        match &mut self2.state {
             ConnectionState::ConnectFuture(cf) => {
-                let tcp_s = match cf.poll() {
-                    Ok(Async::Ready(tcp_s)) => tcp_s,
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Err(err) => {
-                        self.reset();
-                        return Err(err);
-                    }
-                };
-                self.state = ConnectionState::TcpStream(tcp_s);
-                self.set_tcp_settings(self.settings.clone())?;
+                let tcp_s = ready!(cf.as_mut().poll(cx))?;
+                self2.state = ConnectionState::TcpStream(tcp_s);
+                self2.set_tcp_settings(self2.settings.clone())?;
                 debug!("RetryingTcpStream => change state ConnectFuture -> TcpStream")
             }
             ConnectionState::TcpStream(_) => (),
         };
 
-        match self.state {
+        match self2.state {
             ConnectionState::ConnectFuture(_) => unreachable!(),
-            ConnectionState::TcpStream(ref mut ts) => Ok(Async::Ready(ts)),
+            ConnectionState::TcpStream(ref mut ts) => Poll::Ready(Ok(ts)),
         }
     }
 
     fn reset(&mut self) {
         debug!("RetryinTcpStream => reset was called!");
-        self.state = ConnectionState::ConnectFuture(tokio::net::TcpStream::connect(&self.addr))
+        self.state =
+            ConnectionState::ConnectFuture(Box::pin(tokio::net::TcpStream::connect(self.addr)))
     }
 
-    fn call_reset_if_io_is_closed2<T>(&mut self, res: Result<T, Error>) -> Result<T, Error> {
-        use tokio::io::ErrorKind;
+    fn call_reset_if_io_is_closed2<T>(&mut self, res: Result<T, io::Error>) -> io::Result<T> {
+        use std::io::ErrorKind;
         match res {
             Ok(ok) => Ok(ok),
             Err(err) => {
@@ -251,56 +237,43 @@ impl RetryingTcpStream {
     }
 }
 
-impl Read for RetryingTcpStream {
-    /// # Note
-    /// This is Async version of Read. It will panic outside of tash
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let ts = self.poll_into_tcp_stream()?;
-        let r = match ts {
-            Async::Ready(ts) => ts.read(buf),
-            Async::NotReady => Err(std::io::ErrorKind::WouldBlock.into()),
-        };
-
-        self.call_reset_if_io_is_closed2(r)
-    }
-}
-
-impl Write for RetryingTcpStream {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
-        let ts = self.poll_into_tcp_stream()?;
-        let r = match ts {
-            Async::Ready(ts) => ts.write(buf),
-            Async::NotReady => Err(std::io::ErrorKind::WouldBlock.into()),
-        };
-
-        self.call_reset_if_io_is_closed2(r)
-    }
-
-    fn flush(&mut self) -> Result<(), Error> {
-        let ts = self.poll_into_tcp_stream()?;
-        let r = match ts {
-            Async::Ready(ts) => ts.flush(),
-            Async::NotReady => Err(std::io::ErrorKind::WouldBlock.into()),
-        };
-
-        self.call_reset_if_io_is_closed2(r)
-    }
-}
-
 // Logic is implemented inside Read and Write trait becouse we can't overwrite AsyncRead and
 // AsyncWrite for Box<RetryingTcpStream>
 // source: https://docs.rs/tokio-io/0.1.12/src/tokio_io/async_write.rs.html#149
-impl AsyncRead for RetryingTcpStream {}
+impl AsyncRead for RetryingTcpStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let self_mut = self.get_mut();
+        let tcp_s = ready!(self_mut.poll_into_tcp_stream(cx))?;
+        let r = ready!(Pin::new(tcp_s).poll_read(cx, buf));
+        Poll::Ready(self_mut.call_reset_if_io_is_closed2(r))
+    }
+}
 
 impl AsyncWrite for RetryingTcpStream {
-    fn shutdown(&mut self) -> Poll<(), Error> {
-        match &mut self.state {
-            ConnectionState::ConnectFuture(_cf) => {
-                // there is a chance when we call poll conection will resolve to TcpStream
-                // we probably need add a Shutdowned state.
-                unimplemented!();
-            }
-            ConnectionState::TcpStream(ts) => ts.shutdown(),
-        }
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let self_mut = self.get_mut();
+        let tcp_s = ready!(self_mut.poll_into_tcp_stream(cx))?;
+        let r = ready!(Pin::new(tcp_s).poll_write(cx, buf));
+        Poll::Ready(self_mut.call_reset_if_io_is_closed2(r))
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let self_mut = self.get_mut();
+        let tcp_s = ready!(self_mut.poll_into_tcp_stream(cx))?;
+        let r = ready!(Pin::new(tcp_s).poll_flush(cx));
+        Poll::Ready(self_mut.call_reset_if_io_is_closed2(r))
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let self_mut = self.get_mut();
+        let tcp_s = ready!(self_mut.poll_into_tcp_stream(cx))?;
+        let r = ready!(Pin::new(tcp_s).poll_shutdown(cx));
+        Poll::Ready(self_mut.call_reset_if_io_is_closed2(r))
     }
 }
