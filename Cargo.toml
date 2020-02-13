@@ -1,14 +1,45 @@
 [package]
 name = "tokio-retrying-tcpstream"
-description = "tokio::net::TcpStream that will reconnect after fatal error is returned"
-keywords = ["async", "net", "tcp", "io"]
-categories = ["asynchronous", "network-programming"]
+# TODO description = "..."
 version = "0.2.0"
 authors = ["Sylwester Rąpała <sylwesterrapala@outlook.com>"]
 edition = "2018"
-license = "MIT"
+license = "MIT OR Apache-2.0"
+
+repository = "https://github.com/xoac//tokio-retrying-tcpstream"
+# # This points to a file under the package root (relative to this `Cargo.toml`).
+# The contents of this file are stored and indexed in the registry.
+# crates.io will render this file and place the result on the crate's page.
+readme = "README.md"
+
+keywords = ["async", "net", "tcp", "io"]
+categories = ["asynchronous", "network-programming"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# Rust API Guidelines at https://rust-lang.github.io/api-guidelines/about.html
+
+[badges]
+# Codecov: `repository` is required. `branch` is optional; default is `master`
+# `service` is optional; valid values are `github` (default), `bitbucket`, and
+# `gitlab`.
+# codecov = { repository = "...", branch = "master", service = "github" }
+
+# Maintenance: `status` is required. Available options are:
+# - `actively-developed`: New features are being added and bugs are being fixed.
+# - `passively-maintained`: There are no plans for new features, but the maintainer intends to
+#   respond to issues that get filed.
+# - `as-is`: The crate is feature complete, the maintainer does not intend to continue working on
+#   it or providing support, but it works for the purposes it was designed for.
+# - `experimental`: The author wants to share it with the community but is not intending to meet
+#   anyone's particular use case.
+# - `looking-for-maintainer`: The current maintainer would like to transfer the crate to someone
+#   else.
+# - `deprecated`: The maintainer does not recommend using this crate (the description of the crate
+#   can describe why, there could be a better solution available or there could be problems with
+#   the crate that the author does not want to fix).
+# - `none`: Displays no badge on crates.io, since the maintainer has not chosen to specify
+#   their intentions, potential crate users will need to investigate on their own.
+ maintenance = { status = "actively-developed" }
 
 [dependencies]
 tokio = { version = "0.2", features = ["tcp"] }
@@ -19,3 +50,5 @@ log = "0.4"
 futures-retry = { git = "https://gitlab.com/xoac/futures-retry", branch = "test" }
 tokio = { version ="0.2", features = ["full"] }
 tokio-util = {version = "0.2", features = ["codec"] }
+
+# This Cargo.toml was generated from template: https://github.com/xoac/crates-io-lib-template
